@@ -461,21 +461,19 @@ static bool addrinfo_from_host_ctx(struct addrinfo_params_s *dial_params, const 
             dial_params->address = app_data->dst_hostname;
             dial_params->hints.ai_flags = AI_ADDRCONFIG;
         } else if (app_data->dst_ip != NULL && app_data->dst_ip[0] != 0) {
-            address_t *dst = parse_address(app_data->dst_ip);
-            if (dst == NULL) {
+            ziti_address za;
+            if (parse_ziti_address(&za, app_data->dst_ip, strlen(app_data->dst_ip)) <= 0) {
                 snprintf(dial_params->err, sizeof(dial_params->err),
                          "hosted_service[%s] failed to parse requested address '%s'", host_ctx->service_name,
                          app_data->dst_ip);
                 return false;
             }
-            if (!address_match(&dst->ip, &host_ctx->addr_u.allowed_addresses)) {
+            if (!address_match(&za, &host_ctx->addr_u.allowed_addresses)) {
                 snprintf(dial_params->err, sizeof(dial_params->err),
                          "hosted_service[%s] client requested address '%s' is not allowed", host_ctx->service_name,
-                         dst->str);
-                free(dst);
+                         app_data->dst_ip);
                 return false;
             }
-            free(dst);
             dial_params->address = app_data->dst_ip;
             dial_params->hints.ai_flags = AI_ADDRCONFIG | AI_NUMERICSERV;
         } else {
@@ -842,17 +840,21 @@ host_ctx_t *ziti_sdk_c_host(void *ziti_ctx, uv_loop_t *loop, const char *service
                 STAILQ_INIT(&host_ctx->addr_u.allowed_addresses);
                 LIST_INIT(&host_ctx->addr_u.allowed_hostnames);
 
-                string_array allowed_addrs = host_v1_cfg->allowed_addresses;
+                ziti_address_array allowed_addrs = host_v1_cfg->allowed_addresses;
                 for (i = 0; allowed_addrs != NULL && allowed_addrs[i] != NULL; i++) {
-                    address_t *a = parse_address(allowed_addrs[i]);
-                    if (a == NULL) {
+                    if (allowed_addrs[i]->type == ziti_address_hostname) {
                         ZITI_LOG(DEBUG, "hosted_service[%s] failed to parse allowed_address '%s' as IP address",
-                                 host_ctx->service_name, allowed_addrs[i]);
+                                 host_ctx->service_name, allowed_addrs[i]->addr.hostname);
                         struct allowed_hostname_s *dns_entry = calloc(1, sizeof(struct allowed_hostname_s));
-                        dns_entry->domain_name = strdup(allowed_addrs[i]);
+                        dns_entry->domain_name = strdup(allowed_addrs[i]->addr.hostname);
                         LIST_INSERT_HEAD(&host_ctx->addr_u.allowed_hostnames, dns_entry, _next);
-                    } else {
+                    } else if (allowed_addrs[i]->type == ziti_address_cidr) {
+                        address_t *a = calloc(1, sizeof(address_t));
+                        ziti_address_print(a->str, sizeof(a->str), allowed_addrs[i]);
+                        memcpy(&a->za, allowed_addrs[i], sizeof(a->za));
                         STAILQ_INSERT_TAIL(&host_ctx->addr_u.allowed_addresses, a, entries);
+                    } else {
+                        ZITI_LOG(WARN, "unknown ziti_address type %d", allowed_addrs[i]->type);
                     }
                 }
                 if (i == 0) {
@@ -885,15 +887,21 @@ host_ctx_t *ziti_sdk_c_host(void *ziti_ctx, uv_loop_t *loop, const char *service
             }
 
             STAILQ_INIT(&host_ctx->allowed_source_addresses);
-            string_array allowed_src_addrs = host_v1_cfg->allowed_source_addresses;
+            ziti_address_array allowed_src_addrs = host_v1_cfg->allowed_source_addresses;
             for (i = 0; allowed_src_addrs != NULL && allowed_src_addrs[i] != NULL; i++) {
-                address_t *a = parse_address(allowed_src_addrs[i]);
-                if (a == NULL) {
-                    ZITI_LOG(ERROR, "hosted_service[%s] failed to parse allowed_source_address '%s'",
-                             host_ctx->service_name, allowed_src_addrs);
+                if (allowed_src_addrs[i]->type != ziti_address_cidr) {
+                    if (allowed_src_addrs[i]->type == ziti_address_hostname) {
+                        ZITI_LOG(ERROR, "hosted_service[%s] cannot use hostname '%s' as `allowed_source_address`",
+                                 host_ctx->service_name, allowed_src_addrs[i]->addr.hostname);
+                    } else {
+                        ZITI_LOG(ERROR, "unknown ziti_address type %d", allowed_src_addrs[i]->type);
+                    }
                     free_hosted_service_ctx(host_ctx);
                     return NULL;
                 }
+                address_t *a = calloc(1, sizeof(address_t));
+                ziti_address_print(a->str, sizeof(a->str), allowed_src_addrs[i]);
+                memcpy(&a->za, allowed_src_addrs[i], sizeof(a->za));
                 STAILQ_INSERT_TAIL(&host_ctx->allowed_source_addresses, a, entries);
             }
         }

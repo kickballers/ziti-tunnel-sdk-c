@@ -30,17 +30,36 @@ bool protocol_match(const char *protocol, const protocol_list_t *protocols) {
     return false;
 }
 
-bool address_match(const ip_addr_t *addr, const address_list_t *addresses) {
+bool ziti_address_from_ip_addr(ziti_address *zaddr, const ip_addr_t *ip) {
+    memset(zaddr, 0, sizeof(ziti_address));
+    zaddr->type = ziti_address_cidr;
+
+    switch (ip->type) {
+        case IPADDR_TYPE_V4:
+            zaddr->addr.cidr.af = AF_INET;
+            zaddr->addr.cidr.bits = 32;
+            struct in_addr *in4 = (struct in_addr *)&zaddr->addr.cidr.ip;
+            in4->s_addr = ip_addr_get_ip4_u32(ip);
+
+            memcpy(&zaddr->addr.cidr.ip, &ip->u_addr.ip4, sizeof(ip->u_addr.ip4));
+            break;
+        case IPADDR_TYPE_V6:
+            zaddr->addr.cidr.af = AF_INET6;
+            zaddr->addr.cidr.bits = 128;
+            memcpy(&zaddr->addr.cidr.ip, &ip->u_addr.ip6, sizeof(ip->u_addr.ip6));
+            break;
+        default:
+            TNL_LOG(ERR, "unknown address type %d", ip->type);
+            return false;
+    }
+
+    return true;
+}
+
+bool address_match(const ziti_address *addr, const address_list_t *addresses) {
     address_t *a;
     STAILQ_FOREACH(a, addresses, entries) {
-        if (IP_IS_V4(&a->ip) && a->prefix_len != 32) {
-            if (ip_addr_netcmp(addr, &a->ip, ip_2_ip4(&a->_netmask))) {
-                return true;
-            }
-        } else if (IP_IS_V6(&a->ip) && a->prefix_len != 128) {
-            TNL_LOG(ERR, "IPv6 CIDR intercept is not currently supported");
-            return false;
-        } else if (ip_addr_cmp(&a->ip, addr)) {
+        if (ziti_address_match(addr, &a->za)) {
             return true;
         }
     }
@@ -64,15 +83,17 @@ intercept_ctx_t *lookup_intercept_by_address(tunneler_context tnlr_ctx, const ch
         return NULL;
     }
 
+    ziti_address za;
+    ziti_address_from_ip_addr(&za, dst_addr);
     intercept_ctx_t *intercept;
     LIST_FOREACH(intercept, &tnlr_ctx->intercepts, entries) {
         if (!protocol_match(protocol, &intercept->protocols)) continue;
         if (!port_match(dst_port, &intercept->port_ranges)) continue;
-// todo why call match_addr here? lookup_intercept_by_address is always called with IP.
+
         if (intercept->match_addr && intercept->match_addr(dst_addr, intercept->app_intercept_ctx))
             return intercept;
 
-        if (ziti_address_match_array(dst_addr, intercept->addresses))
+        if (address_match(&za, &intercept->addresses))
             return intercept;
     }
 
@@ -80,7 +101,12 @@ intercept_ctx_t *lookup_intercept_by_address(tunneler_context tnlr_ctx, const ch
 }
 
 void free_intercept(intercept_ctx_t *intercept) {
-    free_ziti_address_array(&intercept->addresses);
+    while(!STAILQ_EMPTY(&intercept->addresses)) {
+        address_t *a = STAILQ_FIRST(&intercept->addresses);
+        STAILQ_REMOVE_HEAD(&intercept->addresses, entries);
+        free_ziti_address(&a->za);
+        free(a);
+    }
     while(!STAILQ_EMPTY(&intercept->protocols)) {
         protocol_t *p = STAILQ_FIRST(&intercept->protocols);
         STAILQ_REMOVE_HEAD(&intercept->protocols, entries);

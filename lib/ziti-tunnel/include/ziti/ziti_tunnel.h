@@ -28,6 +28,7 @@
 #include "sys/queue.h"
 #include "ziti/netif_driver.h"
 #include "lwip/ip_addr.h"
+#include "ziti/ziti_model.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -66,14 +67,10 @@ typedef struct protocol_s {
 } protocol_t;
 typedef STAILQ_HEAD(protocol_list_s, protocol_s) protocol_list_t;
 
-// xxx.xxx.xxx.xxx/xx
-#define MAX_IP_OR_CIDR 20
-
 typedef struct address_s {
-    char       str[MAX_IP_OR_CIDR]; // ip || ip/prefix
-    ip_addr_t  ip;
-    ip_addr_t  _netmask;
-    uint8_t    prefix_len;
+    ziti_address za;
+    char         str[64];
+//    ip_addr_t  _netmask;
     STAILQ_ENTRY(address_s) entries;
 } address_t;
 typedef STAILQ_HEAD(address_list_s, address_s) address_list_t;
@@ -103,7 +100,7 @@ extern intercept_ctx_t* intercept_ctx_new(tunneler_context tnlt_ctx, const char 
 extern void intercept_ctx_set_match_addr(intercept_ctx_t *intercept, intercept_match_addr_fn pred);
 extern void intercept_ctx_add_protocol(intercept_ctx_t *ctx, const char *protocol);
 /** parse address string as hostname|ip|cidr and add result to list of intercepted addresses */
-extern address_t *intercept_ctx_add_address(intercept_ctx_t *i_ctx, const char *address);
+extern void intercept_ctx_add_address(intercept_ctx_t *i_ctx, const ziti_address *address);
 extern port_range_t *intercept_ctx_add_port_range(intercept_ctx_t *i_ctx, uint16_t low, uint16_t high);
 extern void intercept_ctx_override_cbs(intercept_ctx_t *i_ctx, ziti_sdk_dial_cb dial, ziti_sdk_write_cb write, ziti_sdk_close_cb close_write, ziti_sdk_close_cb close);
 
@@ -134,11 +131,11 @@ typedef struct tunneler_sdk_options_s {
     ziti_sdk_host_cb    ziti_host;
 } tunneler_sdk_options;
 
-extern address_t *parse_address(const char *ip_or_cidr);
 extern port_range_t *parse_port_range(uint16_t low, uint16_t high);
 
+extern bool ziti_address_from_ip_addr(ziti_address *zaddr, const ip_addr_t *ip);
 extern bool protocol_match(const char *protocol, const protocol_list_t *protocols);
-extern bool address_match(const ip_addr_t *addr, const address_list_t *addresses);
+extern bool address_match(const ziti_address *addr, const address_list_t *addresses);
 extern bool port_match(int port, const port_range_list_t *port_ranges);
 
 extern tunneler_context ziti_tunneler_init(tunneler_sdk_options *opts, uv_loop_t *loop);

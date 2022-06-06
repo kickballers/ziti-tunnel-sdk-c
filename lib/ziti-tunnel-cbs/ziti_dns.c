@@ -340,17 +340,13 @@ void ziti_dns_deregister_intercept(void *intercept) {
     }
 }
 
-const char *ziti_dns_register_hostname(const char *hostname, void *intercept) {
-    // CIDR block
-    if (strchr(hostname, '/')) {
-        return hostname;
-    }
-    // IP address
-    ip_addr_t addr;
-    if (ipaddr_aton(hostname, &addr)) {
-        return hostname;
+const ip_addr_t *ziti_dns_register_hostname(const ziti_address *addr, void *intercept) {
+    // IP or CIDR block
+    if (addr->type == ziti_address_cidr) {
+        return NULL;
     }
 
+    const char *hostname = addr->addr.hostname;
     char clean[MAX_DNS_NAME];
     bool is_domain = false;
 
@@ -374,7 +370,7 @@ const char *ziti_dns_register_hostname(const char *hostname, void *intercept) {
             entry = new_ipv4_entry(clean);
         }
         model_map_set_key(&entry->intercepts, &intercept, sizeof(intercept), intercept);
-        return entry->ip;
+        return &entry->addr;
     }
 }
 
